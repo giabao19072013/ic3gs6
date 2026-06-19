@@ -1,0 +1,6 @@
+{
+  "name": "IC3 LMS & Exam Simulator",
+  "description": "Enterprise-grade Learning Management System & Certiport-mode Exam Simulator for IC3 GS6. Features course modules, an active AI Tutor, Teacher & School Admin dashboards, and a complete Project Technical Documentation Hub.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
