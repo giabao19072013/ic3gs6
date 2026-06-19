@@ -1,8 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ClassGroup } from '../types';
 import { MOCK_TEACHER_CLASSES } from '../lmsData';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import * as Lucide from 'lucide-react';
+import { 
+  getClassesByTeacherFromDb, 
+  saveClassToDb, 
+  deleteClassFromDb 
+} from '../lib/firebase';
 
 interface TeacherDashboardProps {
   user?: {
@@ -49,10 +54,50 @@ export default function TeacherDashboard({ user }: TeacherDashboardProps) {
 
   const activeClass = classes.find((c) => c.id === selectedClassId);
 
+  // Synchronize dynamic Firestore data on mount
+  useEffect(() => {
+    async function syncClassesWithDb() {
+      try {
+        const dbClasses = await getClassesByTeacherFromDb(teacherId);
+        if (dbClasses && dbClasses.length > 0) {
+          setClasses(dbClasses);
+          localStorage.setItem(`ic3_classes_${teacherId}`, JSON.stringify(dbClasses));
+          if (!selectedClassId && dbClasses[0]) {
+            setSelectedClassId(dbClasses[0].id);
+          }
+        } else if (classes && classes.length > 0) {
+          // Sync any offline local creations
+          classes.forEach((cls) => {
+            saveClassToDb(cls.id, cls).catch(e => console.warn(e));
+          });
+        }
+      } catch (err) {
+        console.warn("Could not sync classes with Firestore:", err);
+      }
+    }
+    syncClassesWithDb();
+  }, [teacherId]);
+
   // Synchronize helper
   const saveClasses = (updatedClasses: ClassGroup[]) => {
     setClasses(updatedClasses);
     localStorage.setItem(`ic3_classes_${teacherId}`, JSON.stringify(updatedClasses));
+
+    try {
+      // Find deleted classes and remove from DB
+      classes.forEach((oldCls) => {
+        if (!updatedClasses.some((x) => x.id === oldCls.id)) {
+          deleteClassFromDb(oldCls.id, oldCls.code).catch(e => console.warn(e));
+        }
+      });
+
+      // Save each active class to DB
+      updatedClasses.forEach((cls) => {
+        saveClassToDb(cls.id, cls).catch(e => console.warn(e));
+      });
+    } catch (e) {
+      console.warn("Error syncing classes to Firestore:", e);
+    }
   };
 
   const handleCreateClass = (e: React.FormEvent) => {

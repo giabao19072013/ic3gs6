@@ -8,7 +8,7 @@ import TeacherDashboard from './components/TeacherDashboard';
 import DocExplorer from './components/DocExplorer';
 import AuthScreen from './components/AuthScreen';
 import AccountManager from './components/AccountManager';
-import { auth, getUserProfile, saveUserProfile, UserProfileData } from './lib/firebase';
+import { auth, getUserProfile, saveUserProfile, UserProfileData, getClassByCodeFromDb, saveClassToDb } from './lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import * as Lucide from 'lucide-react';
 
@@ -296,7 +296,19 @@ export default function App() {
         }
       }
 
-      // Fallback for default mock classroom codes if needed
+      // 1.5 Query Firestore to find the online class details
+      let dbClassDetails: any = null;
+      try {
+        const dbClass = await getClassByCodeFromDb(code);
+        if (dbClass) {
+          matchedClass = { id: dbClass.id, name: dbClass.name, code: dbClass.code, teacherId: dbClass.teacherId };
+          dbClassDetails = dbClass;
+        }
+      } catch (dbErr) {
+        console.warn("Error looking up class in Firestore:", dbErr);
+      }
+
+      // Fallback for default mock classroom codes if needed and not found on Firestore
       if (!matchedClass) {
         if (code === 'IC3-K68-BASIC') {
           matchedClass = { id: 'cls_01', name: 'Lớp Luyện thi IC3 - Khóa Cơ bản K68', code: 'IC3-K68-BASIC', teacherId: 'usr_teacher_01' };
@@ -309,50 +321,69 @@ export default function App() {
         return { success: false, message: `Mã liên kết "${code}" không hợp lệ hoặc lớp học không tồn tại.` };
       }
 
-      // 2. Enroll student into teacher's actual roster in localStorage
-      const teacherClassesKey = `ic3_classes_${matchedClass.teacherId}`;
-      const classesRaw = localStorage.getItem(teacherClassesKey) || '[]';
-      let classesList = [];
-      try {
-        classesList = JSON.parse(classesRaw);
-      } catch (e) {}
-
-      let foundClassInTeacherList = classesList.find((c: any) => c.id === matchedClass.id);
-      if (!foundClassInTeacherList) {
-        foundClassInTeacherList = {
-          id: matchedClass.id,
-          name: matchedClass.name,
-          code: matchedClass.code,
-          teacherId: matchedClass.teacherId,
-          studentCount: 0,
-          averageScore: 0,
-          students: [],
-          assignments: []
-        };
-        classesList.push(foundClassInTeacherList);
+      // 2. Fetch or construct current complete class structure to populate student list correctly
+      let finalClassData: any = null;
+      if (dbClassDetails) {
+        finalClassData = { ...dbClassDetails };
+      } else {
+        // Look in local storage
+        const teacherClassesKey = `ic3_classes_${matchedClass.teacherId}`;
+        const classesRaw = localStorage.getItem(teacherClassesKey) || '[]';
+        let classesList = [];
+        try { classesList = JSON.parse(classesRaw); } catch (e) {}
+        const foundLocal = classesList.find((c: any) => c.id === matchedClass.id);
+        if (foundLocal) {
+          finalClassData = { ...foundLocal };
+        } else {
+          finalClassData = {
+            id: matchedClass.id,
+            name: matchedClass.name,
+            code: matchedClass.code,
+            teacherId: matchedClass.teacherId,
+            studentCount: 0,
+            averageScore: 0,
+            students: [],
+            assignments: []
+          };
+        }
       }
 
-      if (!foundClassInTeacherList.students) {
-        foundClassInTeacherList.students = [];
+      if (!finalClassData.students) {
+        finalClassData.students = [];
       }
 
-      const isAlreadyInRoster = foundClassInTeacherList.students.some((s: any) => s.email.toLowerCase() === userProfile.email.toLowerCase());
+      const valEmail = (userProfile.email || '').toLowerCase().trim();
+      const isAlreadyInRoster = finalClassData.students.some((s: any) => s.email.toLowerCase().trim() === valEmail);
+      
+      const studentXp = userProfile.xp || 0;
+      // Formula to estimate dynamic score out of 1000 based on modules and XP
+      const estimatedScore = Math.min(1000, Math.max(300, 300 + Math.floor(studentXp * 0.4)));
+
       if (!isAlreadyInRoster) {
-        foundClassInTeacherList.students.push({
+        finalClassData.students.push({
           id: userProfile.id,
-          name: userProfile.name,
-          email: userProfile.email.toLowerCase(),
+          name: userProfile.name || 'Học viên IC3',
+          email: valEmail,
           completedLessons: userProfile.completedLessons?.length || 0,
-          avgExamScore: 0,
-          predictedPassRate: 0,
-          streakDays: userProfile.streakDays || 0,
+          avgExamScore: estimatedScore,
+          predictedPassRate: Math.min(100, Math.max(40, 40 + Math.floor((studentXp / 1500) * 60))),
+          streakDays: userProfile.streakDays || 1,
           activityStatus: 'active'
         });
-        foundClassInTeacherList.studentCount = foundClassInTeacherList.students.length;
-        localStorage.setItem(teacherClassesKey, JSON.stringify(classesList));
+        
+        finalClassData.studentCount = finalClassData.students.length;
+        const totalScore = finalClassData.students.reduce((acc: number, curr: any) => acc + (curr.avgExamScore || 0), 0);
+        finalClassData.averageScore = Math.floor(totalScore / finalClassData.students.length);
+
+        // Sync back to Firestore so teacher sees this student in real-time
+        await saveClassToDb(finalClassData.id, finalClassData);
+        
+        // Also write back to student's localStorage
+        const teacherClassesKey = `ic3_classes_${matchedClass.teacherId}`;
+        localStorage.setItem(teacherClassesKey, JSON.stringify([finalClassData]));
       }
 
-      // Ensure class exists in shared lists
+      // Ensure class exists in local shared lists
       try {
         const currentShared = JSON.parse(localStorage.getItem('ic3_classes_shared') || '[]');
         if (!currentShared.some((s: any) => s.id === matchedClass.id)) {

@@ -254,6 +254,99 @@ export async function saveUserProfile(userId: string, profile: Partial<UserProfi
 }
 
 /**
+ * Saves or updates a Class group in Firestore.
+ */
+export async function saveClassToDb(classId: string, classData: any): Promise<void> {
+  try {
+    const docRef = doc(db, 'classes', classId);
+    let finalData = { ...classData, id: classId };
+    
+    // Ensure nested structures are clean
+    await setDoc(docRef, finalData, { merge: true });
+    
+    // Also save a code lookup document for high speed queries
+    if (classData.code) {
+      const codeRef = doc(db, 'classCodes', classData.code.toUpperCase().trim());
+      await setDoc(codeRef, { classId, ...classData }, { merge: true });
+    }
+  } catch (error) {
+    console.warn("Background Firebase saveClassToDb error:", error);
+  }
+}
+
+/**
+ * Deletes a Class group from Firestore.
+ */
+export async function deleteClassFromDb(classId: string, code?: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'classes', classId);
+    await deleteDoc(docRef);
+    if (code) {
+      const codeRef = doc(db, 'classCodes', code.toUpperCase().trim());
+      await deleteDoc(codeRef);
+    }
+  } catch (error) {
+    console.warn("Firebase deleteClassFromDb error:", error);
+  }
+}
+
+/**
+ * Retrieves a class by its code from Firestore.
+ */
+export async function getClassByCodeFromDb(code: string): Promise<any | null> {
+  try {
+    const codeRef = doc(db, 'classCodes', code.toUpperCase().trim());
+    const docSnap = await getDoc(codeRef);
+    if (docSnap.exists()) {
+      return docSnap.data();
+    }
+    
+    // Fallback: search classes collection if direct code lookup is missing
+    const q = query(collection(db, 'classes'), where('code', '==', code.toUpperCase().trim()));
+    const querySnapshot = await getDocs(q);
+    if (!querySnapshot.empty) {
+      return querySnapshot.docs[0].data();
+    }
+  } catch (error) {
+    console.warn("Firebase getClassByCodeFromDb error:", error);
+  }
+  return null;
+}
+
+/**
+ * Retrieves all classes for a given teacher.
+ */
+export async function getClassesByTeacherFromDb(teacherId: string): Promise<any[]> {
+  const list: any[] = [];
+  try {
+    const q = query(collection(db, 'classes'), where('teacherId', '==', teacherId));
+    const querySnapshot = await getDocs(q);
+    querySnapshot.forEach((doc) => {
+      list.push(doc.data());
+    });
+  } catch (error) {
+    console.warn("Firebase getClassesByTeacherFromDb error:", error);
+  }
+  return list;
+}
+
+/**
+ * Retrieves all classes from Firestore.
+ */
+export async function getAllClassesFromDb(): Promise<any[]> {
+  const list: any[] = [];
+  try {
+    const querySnapshot = await getDocs(collection(db, 'classes'));
+    querySnapshot.forEach((doc) => {
+      list.push(doc.data());
+    });
+  } catch (error) {
+    console.warn("Firebase getAllClassesFromDb error:", error);
+  }
+  return list;
+}
+
+/**
  * Creates a real Firebase Auth user without signing out the current user session.
  * Utilizes a secondary named Firebase App instance.
  */
